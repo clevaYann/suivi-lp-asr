@@ -85,6 +85,28 @@ php artisan serve      # dans un terminal
 npm run dev            # dans un autre terminal
 ```
 
+## Tests
+
+Les tests utilisent une base MySQL dédiée `suivi_lp_asr_test` (voir `phpunit.xml`), à créer une fois en local.
+
+```bash
+php artisan test                 # tests unitaires et d'intégration (PHPUnit)
+php artisan dusk:chrome-driver   # une seule fois, installe ChromeDriver
+php artisan dusk                 # tests de bout en bout dans le navigateur (Laravel Dusk)
+```
+
+GitHub Actions lance `php artisan test` sur une base MySQL 5.7 à chaque Pull Request vers `develop` ou `main` (`.github/workflows/tests.yml`).
+
+## Documentation du code
+
+La documentation technique est générée par [Doxygen](https://www.doxygen.nl) à partir des commentaires `/** … */` du dossier `app/`.
+
+```bash
+doxygen Doxyfile                 # génère docs/html (non versionné)
+```
+
+À chaque tag `v*`, le workflow `.github/workflows/docs.yml` la régénère et la publie sur GitHub Pages : https://clevayann.github.io/suivi-lp-asr/
+
 ## Déploiement (recette et production)
 
 Lakartxela ne dispose pas de Node.js : les CSS et le JavaScript sont compilés en amont.
