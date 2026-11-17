@@ -11,6 +11,11 @@ export default defineConfig({
         tailwindcss(),
     ],
     server: {
+        // Sous Docker, Vite écoute sur 0.0.0.0 : le navigateur doit quand même
+        // charger les fichiers depuis localhost.
+        hmr: {
+            host: 'localhost',
+        },
         watch: {
             ignored: ['**/storage/framework/views/**'],
         },
