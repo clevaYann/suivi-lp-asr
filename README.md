@@ -44,12 +44,13 @@ Application web qui centralise les exports eLearn (notes, achèvement des activi
 | Vues | Blade, HTML, CSS, un peu de JavaScript (Vite) |
 | Base de données | MySQL 5.7 (Eloquent ORM + migrations) |
 | Import CSV / Excel | Laravel Excel (PhpSpreadsheet) |
+| Environnement de développement | Docker (mêmes versions que Lakartxela : Apache, PHP 8.5, MySQL 5.7.28) |
 
 ## Environnements
 
 | Environnement | Où | Branche | Données |
 |---|---|---|---|
-| Développement | Poste de chaque développeur (`php artisan serve` + `npm run dev`) | `feature/*` | Fictives (seeders) |
+| Développement | Poste de chaque développeur, sous Docker (`docker compose up`) | `feature/*` | Fictives (seeders) |
 | Recette | Instance séparée sur Lakartxela | `develop` | Fictives ou anonymisées |
 | Production | Lakartxela | `main` (version taguée) | Réelles (RGPD) |
 
@@ -67,30 +68,93 @@ feature/*  ──PR + relecture──▶  develop  ──recette validée──�
 
 Aucun push direct sur `main` ni sur `develop` : tout passe par une Pull Request relue par au moins un autre membre. Le détail des règles (commits, PR, versions) est dans [CONTRIBUTING.md](CONTRIBUTING.md).
 
-## Installation locale
+## Installation locale (Docker)
 
-Prérequis : PHP 8.5, Composer, Node.js et npm, MySQL.
+L'environnement de développement tourne sous Docker et reproduit Lakartxela : Apache + PHP 8.5 et MySQL 5.7.28. Personne n'a besoin d'installer PHP, Composer, Node.js ni MySQL sur son poste. Docker ne sert qu'au développement : la recette et la production tournent directement sur Lakartxela.
+
+Prérequis : [Docker Desktop](https://www.docker.com/products/docker-desktop/) (Windows, macOS) ou Docker Engine avec le plugin Compose (Linux), et Git.
+
+### Services
+
+| Service | Rôle | Adresse sur le poste |
+|---|---|---|
+| `app` | Laravel servi par Apache + PHP 8.5 (`docker/php/Dockerfile`) | http://localhost:8000 |
+| `mysql` | MySQL 5.7.28, bases `suivi_lp_asr` et `suivi_lp_asr_test` | `localhost:3307` (client SQL externe) |
+| `node` | Vite : recompile CSS et JavaScript à chaque modification | http://localhost:5173 |
+| `phpmyadmin` | Consultation de la base | http://localhost:8080 |
+| `selenium` | Chrome pour les tests Laravel Dusk (lancé à la demande) | — |
+
+### Premier lancement
 
 ```bash
 git clone https://github.com/clevaYann/suivi-lp-asr.git
 cd suivi-lp-asr
 git switch develop
-composer install
-npm install
-cp .env.example .env
-php artisan key:generate
-# renseigner DB_DATABASE, DB_USERNAME et DB_PASSWORD dans .env
-php artisan migrate --seed
-php artisan serve      # dans un terminal
-npm run dev            # dans un autre terminal
+cp .env.example .env                              # déjà configuré pour Docker
+docker compose up -d --build                      # 1er lancement : quelques minutes
+docker compose exec app php artisan key:generate
+docker compose exec app php artisan migrate --seed
 ```
+
+L'application est sur http://localhost:8000. Au premier démarrage, le conteneur `app` lance `composer install` et le conteneur `node` lance `npm install` : attendre la fin (`docker compose logs -f app node`) avant d'ouvrir la page.
+
+### Au quotidien
+
+```bash
+docker compose up -d                              # démarrer
+docker compose down                               # arrêter (la base est conservée)
+docker compose logs -f app                        # journaux Apache / PHP
+docker compose exec app php artisan migrate       # toute commande artisan
+docker compose exec app composer require <paquet> # dépendances PHP
+docker compose exec node npm install <paquet>     # dépendances JavaScript
+docker compose exec app bash                      # shell dans le conteneur
+```
+
+Après un `git pull` qui modifie `composer.lock` ou `package-lock.json`, relancer `docker compose exec app composer install` ou `docker compose restart node`. Après une modification de `docker/`, reconstruire l'image avec `docker compose up -d --build`.
+
+Pour repartir d'une base vide : `docker compose exec app php artisan migrate:fresh --seed`. Pour tout supprimer, base comprise : `docker compose down -v`.
+
+### Bon à savoir
+
+- Le code est partagé avec le conteneur : les modifications faites dans l'éditeur sont prises en compte immédiatement.
+- `vendor/` et `node_modules/` restent dans des volumes Docker (sinon chaque requête prend plusieurs secondes sous Windows). Ils n'apparaissent donc pas dans le dossier du projet ; pour l'autocomplétion de l'éditeur, on peut lancer `composer install` sur le poste en plus.
+- Ports déjà pris sur le poste : les changer dans `.env` (`APP_PORT`, `FORWARD_DB_PORT`, `PHPMYADMIN_PORT`).
+- phpMyAdmin : utilisateur `suivi`, mot de passe `suivi` (ou `root` / `root`), comme dans `.env`.
+- Le fichier `.env` est lu à la fois par Laravel et par Docker Compose (variables `DB_*`). Changer `DB_DATABASE`, `DB_USERNAME` ou `DB_PASSWORD` après le premier lancement demande de recréer la base : `docker compose down -v`.
+- Sans Docker : PHP 8.5, Composer, Node.js et MySQL 5.7 en local, avec `DB_HOST=127.0.0.1` dans `.env`, puis `php artisan serve` et `npm run dev`.
+
+## Tests
+
+Les tests utilisent une base MySQL dédiée `suivi_lp_asr_test` (voir `phpunit.xml`), créée automatiquement par Docker au premier lancement (`docker/mysql/init`).
+
+```bash
+docker compose exec app php artisan test          # tests unitaires et d'intégration (PHPUnit)
+
+docker compose --profile dusk up -d selenium      # démarre Chrome pour Dusk
+docker compose exec -e APP_URL=http://suivi-lp-asr.test app php artisan dusk
+docker compose --profile dusk stop selenium       # arrête Chrome
+```
+
+Dusk pilote le Chrome du conteneur `selenium`, qui joint l'application à l'adresse `http://suivi-lp-asr.test` (d'où `APP_URL`).
+
+GitHub Actions lance `php artisan test` sur une base MySQL 5.7 à chaque Pull Request vers `develop` ou `main` (`.github/workflows/tests.yml`).
+
+## Documentation du code
+
+La documentation technique est générée par [Doxygen](https://www.doxygen.nl) à partir des commentaires `/** … */` du dossier `app/`.
+
+```bash
+docker compose exec app doxygen Doxyfile        # génère docs/html (non versionné)
+```
+
+À chaque tag `v*`, le workflow `.github/workflows/docs.yml` la régénère et la publie sur GitHub Pages : https://clevayann.github.io/suivi-lp-asr/
 
 ## Déploiement (recette et production)
 
-Lakartxela ne dispose pas de Node.js : les CSS et le JavaScript sont compilés en amont.
+Lakartxela ne dispose ni de Docker ni de Node.js : les CSS et le JavaScript sont compilés en amont, sur un poste de l'équipe.
 
 ```bash
-npm run build
+docker compose run --rm node npm run build        # génère public/build
 # sur le serveur :
 git pull
 composer install --no-dev --optimize-autoloader

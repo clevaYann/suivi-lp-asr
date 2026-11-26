@@ -1,0 +1,91 @@
+# Environnement de développement local (voir README, « Installation locale »).
+# Reproduit Lakartxela : Apache + PHP 8.5 et MySQL 5.7.28.
+# Les variables DB_* sont lues dans le fichier .env de Laravel.
+
+services:
+    # Application Laravel servie par Apache + PHP 8.5 -> http://localhost:8000
+    app:
+        build: ./docker/php
+        image: suivi-lp-asr/app:dev
+        ports:
+            - "${APP_PORT:-8000}:80"
+        volumes:
+            - .:/var/www/html
+            # vendor/ reste dans le conteneur : lu à chaque requête, il serait
+            # très lent à travers le partage de fichiers Windows / macOS.
+            - vendor:/var/www/html/vendor
+            - composer-cache:/root/.composer/cache
+        environment:
+            # Laravel Dusk : utilise le navigateur du service selenium.
+            LARAVEL_SAIL: "1"
+            DUSK_DRIVER_URL: http://selenium:4444/wd/hub
+        # Installe les dépendances PHP au premier démarrage, puis lance Apache.
+        command: ["sh", "-c", "[ -f vendor/autoload.php ] || composer install --no-interaction; exec apache2-foreground"]
+        depends_on:
+            mysql:
+                condition: service_healthy
+        networks:
+            default:
+                # Nom utilisé par le navigateur de Dusk (Chrome refuse « http://app »).
+                aliases: ["suivi-lp-asr.test"]
+
+    # Base de données, même version que sur Lakartxela.
+    mysql:
+        image: mysql:5.7.28
+        platform: linux/amd64
+        command: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_unicode_ci"]
+        ports:
+            - "${FORWARD_DB_PORT:-3307}:3306"
+        environment:
+            MYSQL_ROOT_PASSWORD: "${DB_ROOT_PASSWORD:-root}"
+            MYSQL_DATABASE: "${DB_DATABASE:-suivi_lp_asr}"
+            MYSQL_USER: "${DB_USERNAME:-suivi}"
+            MYSQL_PASSWORD: "${DB_PASSWORD:-suivi}"
+        volumes:
+            - mysql-data:/var/lib/mysql
+            - ./docker/mysql/init:/docker-entrypoint-initdb.d:ro
+        healthcheck:
+            test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p\"$$MYSQL_ROOT_PASSWORD\" --silent"]
+            interval: 5s
+            timeout: 5s
+            retries: 20
+
+    # Vite : recompile CSS et JavaScript à chaque modification -> port 5173
+    node:
+        image: node:22-slim
+        working_dir: /app
+        init: true
+        ports:
+            - "5173:5173"
+        volumes:
+            - .:/app
+            # node_modules propre au conteneur (binaires Linux, pas ceux de l'hôte).
+            - node-modules:/app/node_modules
+        environment:
+            # Les modifications faites depuis Windows ne déclenchent pas d'événement
+            # dans le conteneur : on surveille les fichiers par scrutation.
+            CHOKIDAR_USEPOLLING: "true"
+        command: ["sh", "-c", "npm install && npm run dev -- --host 0.0.0.0"]
+
+    # Interface web pour consulter la base -> http://localhost:8080
+    phpmyadmin:
+        image: phpmyadmin:5
+        ports:
+            - "${PHPMYADMIN_PORT:-8080}:80"
+        environment:
+            PMA_HOST: mysql
+            UPLOAD_LIMIT: 25M
+        depends_on:
+            - mysql
+
+    # Navigateur pour les tests Laravel Dusk (démarré à la demande).
+    selenium:
+        image: selenium/standalone-chromium
+        profiles: ["dusk"]
+        shm_size: 2gb
+
+volumes:
+    mysql-data:
+    vendor:
+    node-modules:
+    composer-cache:
